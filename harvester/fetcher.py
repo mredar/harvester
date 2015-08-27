@@ -138,22 +138,46 @@ class OAIFetcher(Fetcher):
 class SolrFetcher(Fetcher):
     def __init__(self, url_harvest, query, **query_params):
         super(SolrFetcher, self).__init__(url_harvest, query)
-        self.solr = solr.Solr(url_harvest)  # , debug=True)
+        self.solr = solr.Solr(url_harvest, debug=True)
+        print >> sys.stderr,  dir(self.solr)
         self.query = query
-        self.resp = self.solr.select(self.query)
+        print >> sys.stderr, "URL: {} QUERY: {}".format(url_harvest, self.query)
+        self.resp = self.solr.select(self.query, rows=1)
         self.numFound = self.resp.numFound
         self.index = 0
+        self.backoff_time = 0
 
     def next(self):
         if self.index < len(self.resp.results):
             self.index += 1
+            print >> sys.stderr, "DOCUMENT #:{} idx:{} boff:{}".format(int(self.resp.results.start)+self.index,
+                    self.index,
+                    self.backoff_time)
             return self.resp.results[self.index-1]
-        self.index = 1
-        self.resp = self.resp.next_batch()
+        self.index = 0
+        err = True
+        while(err):
+            try:
+                time.sleep(self.backoff_time)
+                st_dt = datetime.datetime.now()
+                self.resp = self.resp.next_batch() # if err here, bad one.
+                tdelta = datetime.datetime.now() - st_dt
+                self.backoff_time = float(tdelta.seconds) + float(tdelta.microseconds)/1000000
+                err = False
+            except ValueError, e:
+                print >> sys.stderr, "RESP:{}".format(self.resp)
+                print >> sys.stderr, "LEN:{} START:{}".format(len(self.resp.results),
+                    self.resp.results.start)
+                new_start = int(self.resp.results.start) + 1
+                self.resp.results.start = new_start
+                self.resp._set_start = new_start
+            except solr.SolrException, e:
+                print "SolrException:{}".format(e)
+                time.sleep(2)
+
         if not len(self.resp.results):
             raise StopIteration
         return self.resp.results[self.index-1]
-
 
 class MARCFetcher(Fetcher):
     '''Harvest a MARC FILE. Can be local or at a URL'''
