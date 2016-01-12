@@ -168,9 +168,6 @@ class SolrFetcher(Fetcher):
                 self.backoff_time = float(tdelta.seconds) + float(tdelta.microseconds)/1000000
                 err = False
             except ValueError, e:
-                print >> sys.stderr, "RESP:{}".format(self.resp)
-                print >> sys.stderr, "LEN:{} START:{}".format(len(self.resp.results),
-                    self.resp.results.start)
                 new_start = int(self.resp.results.start) + 1
                 self.resp.results.start = new_start
                 self.resp._set_start = new_start
