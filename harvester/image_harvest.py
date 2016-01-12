@@ -10,25 +10,35 @@ import datetime
 import time
 import urlparse
 import couchdb
+from couchdb import ResourceConflict
 import requests
 import md5s3stash
+import boto.s3
+import logging
 from harvester.couchdb_init import get_couchdb
 from harvester.config import config
 from redis import Redis
 import redis_collections
 from harvester.couchdb_pager import couchdb_pager
 
-BUCKET_BASE = os.environ.get('S3_BUCKET_IMAGE_BASE', 'ucldc')
+BUCKET_BASES = os.environ.get('S3_BUCKET_IMAGE_BASE',
+              'us-west-2:static-ucldc-cdlib-org/harvested_images;us-east-1:static.ucldc.cdlib.org/harvested_images'
+              ).split(';')
 COUCHDB_VIEW = 'all_provider_docs/by_provider_name'
 URL_OAC_CONTENT_BASE = os.environ.get('URL_OAC_CONTENT_BASE',
                                       'http://content.cdlib.org')
+
+logging.basicConfig(level=logging.DEBUG, )
 
 def link_is_to_image(url, auth=None):
     '''Check if the link points to an image content type.
     Return True or False accordingly
     '''
-    response = requests.head(url, allow_redirects=True,
-            auth=auth)
+    if md5s3stash.is_s3_url(url):
+        response = requests.head(url, allow_redirects=True)
+    else:
+        response = requests.head(url, allow_redirects=True,
+                                 auth=auth)
     if response.status_code != 200:
         return False
     content_type = response.headers.get('content-type', None)
@@ -43,7 +53,7 @@ class ImageHarvester(object):
                  url_couchdb=None,
                  couchdb_name=None,
                  couch_view=COUCHDB_VIEW,
-                 bucket_base=BUCKET_BASE,
+                 bucket_bases=BUCKET_BASES,
                  object_auth=None,
                  get_if_object=False):
         self._config = config()
@@ -54,7 +64,7 @@ class ImageHarvester(object):
                 url_couchdb = self._config['couchdb_url']
             self._couchdb = get_couchdb(url=url_couchdb,
                                         dbname=couchdb_name)
-        self._bucket_base = bucket_base
+        self._bucket_bases = bucket_bases
         self._view = couch_view
         # auth is a tuple of username, password
         self._auth = object_auth
@@ -71,6 +81,9 @@ class ImageHarvester(object):
     # Need to make each download a separate job.
     def stash_image(self, doc):
         '''Stash the images in s3, using md5s3stash
+        Duplicate it among the "BUCKET_BASES" list. This will give redundancy
+        in case some idiot (me) deletes one of the copies. Not tons of data so
+        cheap to replicate them.
         Return md5s3stash report if image found
         If link is not an image type, don't stash & return None
         '''
@@ -91,17 +104,26 @@ class ImageHarvester(object):
             print >> sys.stderr, 'Link not http URL for {} - {}'.format(
                                       doc['_id'], url_image)
             return None
+        reports = []
         if link_is_to_image(url_image, self._auth):
-            try:
-                report = md5s3stash.md5s3stash(url_image,
-                                         bucket_base=self._bucket_base,
-                                         url_auth=self._auth,
-                                         url_cache=self._url_cache,
-                                         hash_cache=self._hash_cache)
-                return report
-            except TypeError, e:
-                print >> sys.stderr, 'TypeError for doc:{} {} Msg: {} Args: {}'.format(
-                    doc['_id'], url_image, e.message, e.args)
+            for bucket_base in self._bucket_bases:
+                try:
+                    logging.getLogger('image_harvest.stash_image').info(
+                            'bucket_base:{0} url_image:{1}'.format(
+                                bucket_base, url_image))
+                    region, bucket_base = bucket_base.split(':')
+                    conn = boto.s3.connect_to_region(region)
+                    report = md5s3stash.md5s3stash(url_image,
+                                             bucket_base=bucket_base,
+                                             conn=conn,
+                                             url_auth=self._auth,
+                                             url_cache=self._url_cache,
+                                             hash_cache=self._hash_cache)
+                    reports.append(report)
+                except TypeError, e:
+                    print >> sys.stderr, 'TypeError for doc:{} {} Msg: {} Args: {}'.format(
+                        doc['_id'], url_image, e.message, e.args)
+            return reports
         else:
             print >> sys.stderr, 'Not an image for {} - {}'.format(
                                       doc['_id'], url_image)
@@ -111,19 +133,22 @@ class ImageHarvester(object):
         '''Update the object field to point to an s3 bucket'''
         doc['object'] = report.md5
         doc['object_dimensions'] = report.dimensions
-        self._couchdb.save(doc)
+        try:
+            self._couchdb.save(doc)
+        except ResourceConflict, e:
+            print >> sys.stderr, 'ResourceConflictfor doc: {}'.format(doc['id'])
         return doc['object']
 
     def harvest_image_for_doc(self, doc):
         '''Try to harvest an image for a couchdb doc'''
-        report = None
+        reports = None
         if not self.get_if_object and doc.get('object', False):
             print >> sys.stderr, 'Skipping {}, has object field'.format(doc['_id'])
             return
         try:
-            report = self.stash_image(doc)
-            if report != None:
-                obj_val = self.update_doc_object(doc, report)
+            reports = self.stash_image(doc)
+            if reports != None and len(reports) > 0:
+                obj_val = self.update_doc_object(doc, reports[0])
         except KeyError, e:
             if 'isShownBy' in e.message:
                  print >> sys.stderr, e
@@ -136,14 +161,14 @@ class ImageHarvester(object):
                 raise e
         except IOError, e:
              print >> sys.stderr, e
-        return report
+        return reports
 
     def by_list_of_doc_ids(self, doc_ids):
         '''For a list of ids, harvest images'''
         for doc_id in doc_ids:
             doc = self._couchdb[doc_id]
             dt_start = dt_end = datetime.datetime.now()
-            report = self.harvest_image_for_doc(doc)
+            reports = self.harvest_image_for_doc(doc)
             dt_end = datetime.datetime.now()
             time.sleep((dt_end-dt_start).total_seconds())
 
@@ -162,7 +187,7 @@ class ImageHarvester(object):
         doc_ids = []
         for r in v:
             dt_start = dt_end = datetime.datetime.now()
-            report = self.harvest_image_for_doc(r.doc)
+            reports = self.harvest_image_for_doc(r.doc)
             doc_ids.append(r.doc['_id'])
             dt_end = datetime.datetime.now()
             time.sleep((dt_end-dt_start).total_seconds())

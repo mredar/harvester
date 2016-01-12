@@ -6,6 +6,7 @@ import re
 from xml.etree import ElementTree as ET
 import json
 import solr
+import pysolr
 import httpretty
 from mock import patch, call
 from mock import Mock
@@ -30,7 +31,6 @@ class HarvestOAC_JSON_ControllerTestCase(ConfigFileOverrideMixin, LogOverrideMix
             'http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/tf2v19n928',
                 body=open(DIR_FIXTURES+'/testOAC.json').read())
         self.collection = Collection('https://registry.cdlib.org/api/v1/collection/178/')
-        #print "COLLECTION DIR:{}".format(dir(self.collection))
         self.setUp_config(self.collection)
         self.controller = fetcher.HarvestController('email@example.com', self.collection, config_file=self.config_file, profile_path=self.profile_path)
 
@@ -67,6 +67,9 @@ class HarvestOAC_JSON_ControllerTestCase(ConfigFileOverrideMixin, LogOverrideMix
         self.assertEqual(len(dir_list), 2)
         objset_saved = json.loads(open(os.path.join(self.controller.dir_save, dir_list[0])).read())
         obj = objset_saved[2]
+        self.assertIn('source_collection_name', obj)
+        self.assertEqual(obj['source_collection_name'],
+                'record source collection name')
         self.assertIn('collection', obj)
         self.assertIn('@id', obj['collection'][0])
         self.assertIn('title', obj['collection'][0])
@@ -507,7 +510,7 @@ class SolrFetcherTestCase(LogOverrideMixin, TestCase):
         if initial data not correct'''
         httpretty.register_uri(httpretty.POST,
             'http://example.edu/solr/select',
-            body=open(DIR_FIXTURES+'/ucsd_bb5837608z-1.xml').read()
+            body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.xml').read()
             )
         self.assertRaises(TypeError, fetcher.SolrFetcher)
         h = fetcher.SolrFetcher('http://example.edu/solr', 'extra_data',
@@ -530,11 +533,11 @@ class SolrFetcherTestCase(LogOverrideMixin, TestCase):
         httpretty.register_uri(httpretty.POST,
             'http://example.edu/solr/select',
             responses=[
-                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd_bb5837608z-1.xml').read()),
-                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd_bb5837608z-2.xml').read()),
-                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd_bb5837608z-3.xml').read()),
-                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd_bb5837608z-4.xml').read()),
-                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd_bb5837608z-5.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-1.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-2.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-3.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-4.xml').read())
             ]
             )
         h = fetcher.SolrFetcher('http://example.edu/solr', 'extra_data',
@@ -543,8 +546,100 @@ class SolrFetcherTestCase(LogOverrideMixin, TestCase):
         n = 0
         for r in h:
             n += 1
-        self.assertEqual(['Urey Hall and Mayer Hall'], r['title_tesim'])
+        self.assertEqual(['Mission at Santa Barbara'], r['title_tesim'])
         self.assertEqual(n, 10)
+
+class PySolrFetcherTestCase(LogOverrideMixin, TestCase):
+    '''Test the harvesting of solr baed data.'''
+    # URL:/solr/select body:q=extra_data&version=2.2&fl=%2A%2Cscore&wt=standard
+    @httpretty.activate
+    def testClassInit(self):
+        '''Test that the class exists and gives good error messages
+        if initial data not correct'''
+        httpretty.register_uri(httpretty.GET,
+                'http://example.edu/solr/query',
+            body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.json').read()
+            )
+        self.assertRaises(TypeError, fetcher.PySolrFetcher)
+        h = fetcher.PySolrFetcher('http://example.edu/solr', 'extra_data',)
+        #rows=3)
+        self.assertTrue(hasattr(h, 'solr'))
+        self.assertTrue(isinstance(h.solr, pysolr.Solr))
+        self.assertEqual(h.solr.url, 'http://example.edu/solr')
+        self.assertTrue(hasattr(h, 'results'))
+        self.assertEqual(len(h.results), 4)
+        self.assertEqual(h.results['response']['numFound'], 10)
+        self.assertEqual(h.numFound, 10)
+        self.assertTrue(hasattr(h, 'index'))
+
+    @httpretty.activate
+    def testIterateOverResults(self):
+        '''Test the iteration over a mock set of data'''
+        httpretty.register_uri(httpretty.GET,
+            'http://example.edu/solr/query',
+            responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.json').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-1.json').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-2.json').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-3.json').read()),
+#                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-4.json').read())
+            ]
+        )
+        self.assertRaises(TypeError, fetcher.PySolrFetcher)
+        h = fetcher.PySolrFetcher('http://example.edu/solr', 'extra_data',
+                **{ 'rows':3 })
+        #h = fetcher.PySolrFetcher('http://solr.industrydocuments.library.ucsf.edu/solr/ltdl3', 'collection:["Gallaher"]')
+        #self.assertEqual(len(h.results), 3)
+        #self.assertEqual(h.numFound, 10)
+        n = 0
+        for r in h:
+            n += 1
+        self.assertEqual(n, 10)
+        self.assertEqual(['Mission Santa Ynez'], r['title_tesim'])
+
+class HarvestSolr_ControllerTestCase(ConfigFileOverrideMixin, LogOverrideMixin, TestCase):
+    '''Test the function of Solr harvest controller'''
+    @httpretty.activate
+    def setUp(self):
+        super(HarvestSolr_ControllerTestCase, self).setUp()
+        # self.testFile = DIR_FIXTURES+'/collection_api_test_oac.json'
+        httpretty.register_uri(httpretty.GET,
+                "https://registry.cdlib.org/api/v1/collection/183/",
+                body=open(DIR_FIXTURES+'/collection_api_solr_harvest.json').read())
+        httpretty.register_uri(httpretty.POST,
+                'http://example.edu/solr/blacklight/select',
+                body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.xml').read()
+                )
+        self.collection = Collection('https://registry.cdlib.org/api/v1/collection/183/')
+        self.setUp_config(self.collection)
+        self.controller = fetcher.HarvestController('email@example.com', self.collection, config_file=self.config_file, profile_path=self.profile_path)
+        print "DIR SAVE::::: {}".format(self.controller.dir_save)
+
+    def tearDown(self):
+        super(HarvestSolr_ControllerTestCase, self).tearDown()
+        self.tearDown_config()
+        #shutil.rmtree(self.controller.dir_save)
+
+    @httpretty.activate
+    def testSolrHarvest(self):
+        '''Test the function of the Solr harvest with <date> objects
+        in stream'''
+        httpretty.register_uri(httpretty.POST,
+            'http://example.edu/solr/blacklight/select',
+            responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-0.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-1.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-2.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-3.xml').read()),
+                    httpretty.Response(body=open(DIR_FIXTURES+'/ucsd-new-feed-missions-bb3038949s-4.xml').read())
+            ]
+            )
+        self.assertTrue(hasattr(self.controller, 'harvest'))
+        self.controller.harvest()
+        print "LOGS:{}".format(self.test_log_handler.formatted_records)
+        self.assertEqual(len(self.test_log_handler.records), 2)
+        self.assertTrue('UC San Diego' in self.test_log_handler.formatted_records[0])
+        self.assertEqual(self.test_log_handler.formatted_records[1], '[INFO] HarvestController: 13 records harvested')
 
 
 class MARCFetcherTestCase(LogOverrideMixin, TestCase):
@@ -700,7 +795,7 @@ class NuxeoFetcherTestCase(LogOverrideMixin, TestCase):
                 body=open(DIR_FIXTURES+'/nuxeo_folder.json').read())
         deepharvest_mocker(mock_deepharvest)
         h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
-        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf={})
+        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf_pynux={})
         self.assertTrue(hasattr(h, '_url'))  # assert in called next repeatedly
         self.assertEqual(h.url, 'https://example.edu/api/v1/')
         self.assertTrue(hasattr(h, '_nx'))
@@ -717,7 +812,7 @@ class NuxeoFetcherTestCase(LogOverrideMixin, TestCase):
         deepharvest_mocker(mock_deepharvest)
         mock_boto.return_value.get_bucket.return_value.get_key.return_value.get_contents_as_string.return_value=media_json
         h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
-        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf={})
+        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf_pynux={})
         structmap_text = h._get_structmap_text('s3://static.ucldc.cdlib.org/media_json/81249b9c-5a87-43af-877c-fb161325b1a0-media.json')
 
         mock_boto.assert_called_with()
@@ -747,8 +842,16 @@ class NuxeoFetcherTestCase(LogOverrideMixin, TestCase):
         httpretty.register_uri(httpretty.GET,
                 re.compile('https://example.edu/api/v1/id/.*'),
                 body=open(DIR_FIXTURES+'/nuxeo_doc.json').read())
+
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/path/asset-library/UCI/Cochems/MS-R016_1092.tif/@children?currentPageIndex=0',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_no_children.json').read(), status=200),
+                ]
+            )
+
         h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
-        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf={})
+        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf_pynux={})
         docs = []
         for d in h:
             docs.append(d)
@@ -758,7 +861,8 @@ class NuxeoFetcherTestCase(LogOverrideMixin, TestCase):
         self.assertIn('structmap_url', docs[0])
         self.assertIn('structmap_text', docs[0])
         self.assertEqual(docs[0]['structmap_text'], "Angela Davis socializing with students at UC Irvine AS-061_A69-013_001.tif AS-061_A69-013_002.tif AS-061_A69-013_003.tif AS-061_A69-013_004.tif AS-061_A69-013_005.tif AS-061_A69-013_006.tif AS-061_A69-013_007.tif")
- 
+        self.assertEqual(docs[0]['isShownBy'], 'https://nuxeo.cdlib.org/Nuxeo/nxpicsfile/default/40677ed1-f7c2-476f-886d-bf79c3fec8c4/Medium:content/')
+        
     @httpretty.activate
     @patch('boto.connect_s3', autospec=True)
     @patch('harvester.fetcher.DeepHarvestNuxeo', autospec=True) 
@@ -780,22 +884,81 @@ class NuxeoFetcherTestCase(LogOverrideMixin, TestCase):
         httpretty.register_uri(httpretty.GET,
                 re.compile('https://example.edu/api/v1/id/.*'),
                 body=open(DIR_FIXTURES+'/nuxeo_doc.json').read())
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/path/asset-library/UCI/Cochems/MS-R016_1092.tif/@children?currentPageIndex=0',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_no_children.json').read(), status=200),
+                ]
+            )
         h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
-        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf={})
+        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf_pynux={})
         docs = []
         for d in h:
             docs.append(d)
         self.assertEqual(docs[0]['structmap_text'], '')
         self.assertEqual(docs[1]['structmap_text'], '')
         self.assertEqual(docs[2]['structmap_text'], '')
-        self.assertEqual(len(self.test_log_handler.records), 3)
-        self.assertEqual(self.test_log_handler.formatted_records[1],
-                ('[ERROR] FetcherBaseClass: Media json at: '
-                  '/media_json/d34ece39-a5f1-4448-b20c-1698637d4fbb-media.json '
-                  'missing.'
-                )
+
+    @httpretty.activate
+    @patch('boto.connect_s3', autospec=True)
+    @patch('harvester.fetcher.DeepHarvestNuxeo', autospec=True)
+    def test_get_isShownBy_component_image(self, mock_deepharvest, mock_boto):
+        ''' test getting correct isShownBy value for Nuxeo doc 
+            with no image at parent level, but an image at the component level
+        '''
+        deepharvest_mocker(mock_deepharvest)
+
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/path/@search?query=SELECT+%2A+FROM+Document+WHERE+ecm%3AparentId+%3D+%27d400bb29-98d4-429c-a0b8-119acdb92006%27+ORDER+BY+ecm%3Apos&currentPageIndex=0&pageSize=100',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_image_components.json').read(), status=200),
+                ]
             )
 
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/id/e8af2d74-0c8b-4d18-b86c-4067b9e16159',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_first_image_component.json').read(), status=200),
+                ]
+            )
+
+        h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
+        
+        nuxeo_metadata = open(DIR_FIXTURES+'/nuxeo_doc_imageless_parent.json').read()
+        nuxeo_metadata = json.loads(nuxeo_metadata)
+        isShownBy = h._get_isShownBy(nuxeo_metadata)
+        self.assertEqual(isShownBy, 'https://nuxeo.cdlib.org/Nuxeo/nxpicsfile/default/e8af2d74-0c8b-4d18-b86c-4067b9e16159/Medium:content/')
+
+    @httpretty.activate
+    @patch('boto.connect_s3', autospec=True)
+    @patch('harvester.fetcher.DeepHarvestNuxeo', autospec=True)
+    def test_get_isShownBy_pdf(self, mock_deepharvest, mock_boto):
+        ''' test getting correct isShownBy value for Nuxeo doc
+            with no images and PDF at parent level 
+        '''
+        deepharvest_mocker(mock_deepharvest)
+
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/path/@search?query=SELECT+%2A+FROM+Document+WHERE+ecm%3AparentId+%3D+%2700d55837-01b6-4211-80d8-b966a15c257e%27+ORDER+BY+ecm%3Apos&currentPageIndex=0&pageSize=100',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_no_children.json').read(), status=200),
+                ]
+            )
+
+        '''
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/api/v1/id/e8af2d74-0c8b-4d18-b86c-4067b9e16159',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_first_image_component.json').read(), status=200),
+                ]
+            )
+        '''
+        h = fetcher.NuxeoFetcher('https://example.edu/api/v1/', 'path-to-asset/here')
+
+        nuxeo_metadata = open(DIR_FIXTURES+'/nuxeo_doc_pdf_parent.json').read()
+        nuxeo_metadata = json.loads(nuxeo_metadata)
+        isShownBy = h._get_isShownBy(nuxeo_metadata)
+        self.assertEqual(isShownBy, 'https://s3.amazonaws.com/static.ucldc.cdlib.org/ucldc-nuxeo-thumb-media/00d55837-01b6-4211-80d8-b966a15c257e')
 
 class UCLDCNuxeoFetcherTestCase(LogOverrideMixin, TestCase):
     '''Test that the UCLDC Nuxeo Fetcher errors if necessary
@@ -830,9 +993,12 @@ class UCLDCNuxeoFetcherTestCase(LogOverrideMixin, TestCase):
         )
         h = fetcher.UCLDCNuxeoFetcher('https://example.edu/api/v1/',
                 'path-to-asset/here',
-                conf_pynux={'X-NXDocumentProperties': 'dublincore,ucldc_schema,picture'}
+                conf_pynux={'X-NXDocumentProperties':
+                    'dublincore,ucldc_schema,picture,file'}
                 )
-        mock_deepharvest.assert_called_with('path-to-asset/here', '', conf={'X-NXDocumentProperties': 'dublincore,ucldc_schema,picture'})
+        mock_deepharvest.assert_called_with('path-to-asset/here', '',
+                conf_pynux={'X-NXDocumentProperties':
+                    'dublincore,ucldc_schema,picture,file'})
         self.assertIn('dublincore', h._nx.conf['X-NXDocumentProperties'])
         self.assertIn('ucldc_schema', h._nx.conf['X-NXDocumentProperties'])
         self.assertIn('picture', h._nx.conf['X-NXDocumentProperties'])
@@ -870,6 +1036,14 @@ class Harvest_UCLDCNuxeo_ControllerTestCase(ConfigFileOverrideMixin, LogOverride
         httpretty.register_uri(httpretty.GET,
                 re.compile('https://example.edu/Nuxeo/site/api/v1/id/.*'),
                 body=open(DIR_FIXTURES+'/nuxeo_doc.json').read())
+
+        httpretty.register_uri(httpretty.GET,
+                'https://example.edu/Nuxeo/site/api/v1/path/asset-library/UCI/Cochems/MS-R016_1092.tif/@children?currentPageIndex=0',
+                responses=[
+                    httpretty.Response(body=open(DIR_FIXTURES+'/nuxeo_no_children.json').read(), status=200),
+                ]
+            )
+
         self.collection = Collection('http://registry.cdlib.org/api/v1/collection/19/')
         with patch('ConfigParser.SafeConfigParser', autospec=True) as mock_configparser:
             config_inst = mock_configparser.return_value
@@ -902,6 +1076,44 @@ class Harvest_UCLDCNuxeo_ControllerTestCase(ConfigFileOverrideMixin, LogOverride
         self.assertEqual(saved_obj['collection'][0]['rights_status'], 'PD')
         self.assertEqual(saved_obj['state'], 'project')
         self.assertEqual(saved_obj['title'], 'Adeline Cochems having her portrait taken by her father Edward W, Cochems in Santa Ana, California: Photograph')
+
+
+class HarvestOAC_XML_ControllerTestCase(ConfigFileOverrideMixin, LogOverrideMixin, TestCase):
+    '''Test the function of an OAC XML harvest controller'''
+    @httpretty.activate
+    def setUp(self):
+        super(HarvestOAC_XML_ControllerTestCase, self).setUp()
+        # self.testFile = DIR_FIXTURES+'/collection_api_test_oac.json'
+        httpretty.register_uri(httpretty.GET,
+                "https://registry.cdlib.org/api/v1/collection/178/",
+                body=open(DIR_FIXTURES+'/collection_api_test_oac_xml.json').read())
+        httpretty.register_uri(httpretty.GET,
+                'http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/tf0c600134',
+                body=open(DIR_FIXTURES+'/testOAC-url_next-0.xml').read())
+        self.collection = Collection('https://registry.cdlib.org/api/v1/collection/178/')
+        #print "COLLECTION DIR:{}".format(dir(self.collection))
+        self.setUp_config(self.collection)
+        self.controller = fetcher.HarvestController('email@example.com', self.collection, config_file=self.config_file, profile_path=self.profile_path)
+        print "DIR SAVE::::: {}".format(self.controller.dir_save)
+
+    def tearDown(self):
+        super(HarvestOAC_XML_ControllerTestCase, self).tearDown()
+        self.tearDown_config()
+        #shutil.rmtree(self.controller.dir_save)
+
+    @httpretty.activate
+    def testOAC_XML_Harvest(self):
+        '''Test the function of the OAC harvest'''
+        httpretty.register_uri(httpretty.GET,
+                'http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/tf0c600134',
+                #'http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/tf2v19n928',
+                body=open(DIR_FIXTURES+'/testOAC-url_next-1.xml').read())
+        self.assertTrue(hasattr(self.controller, 'harvest'))
+        self.controller.harvest()
+        print "LOGS:{}".format(self.test_log_handler.formatted_records)
+        self.assertEqual(len(self.test_log_handler.records), 2)
+        self.assertTrue('UCB Department of Statistics' in self.test_log_handler.formatted_records[0])
+        self.assertEqual(self.test_log_handler.formatted_records[1], '[INFO] HarvestController: 24 records harvested')
 
 
 class OAC_XML_FetcherTestCase(LogOverrideMixin, TestCase):
@@ -949,6 +1161,17 @@ class OAC_XML_FetcherTestCase(LogOverrideMixin, TestCase):
         self.assertEqual(h.totalDocs, 25)
         self.assertEqual(h.currentDoc, 25)
         self.assertEqual(len(objset), 25)
+
+    @httpretty.activate
+    def testAmpersandInDoc(self):
+        httpretty.register_uri(httpretty.GET,
+                'http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/hb5d5nb7dj',
+                body=open(DIR_FIXTURES+'/testOAC-utf8-content.xml').read())
+        h = fetcher.OAC_XML_Fetcher('http://dsc.cdlib.org/search?facet=type-tab&style=cui&raw=1&relation=ark:/13030/hb5d5nb7dj', 'extra_data')
+        self.assertEqual(h.totalDocs, 25)
+        self.assertEqual(h.currentDoc, 0)
+        objset = h.next()
+            
 
     def testDocHitsToObjset(self):
         '''Check that the _docHits_to_objset to function returns expected

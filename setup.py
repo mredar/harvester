@@ -46,6 +46,7 @@ setup(
         'lxml==3.3.5',
         'requests==2.1.0',
         'solrpy>=0.9.7',
+        'pysolr>=3.3.0',
         'pilbox==1.0.3',
         'wsgiref==0.1.2',
         'Logbook==0.6.0',
@@ -58,7 +59,7 @@ setup(
         'boto==2.29.1',
         'CouchDB==0.9',
         'md5s3stash',
-        'pymarc>=3.0',
+        'pymarc==3.0.4',
         'facet_decade',
         'redis_collections',
         'UCLDC-Deep-Harvester'
