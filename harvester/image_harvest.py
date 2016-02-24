@@ -15,11 +15,13 @@ import requests
 import md5s3stash
 import boto.s3
 import logging
+from collections import namedtuple
 from harvester.couchdb_init import get_couchdb
 from harvester.config import config
 from redis import Redis
 import redis_collections
 from harvester.couchdb_pager import couchdb_pager
+from harvester.cleanup_dir import cleanup_work_dir
 
 BUCKET_BASES = os.environ.get('S3_BUCKET_IMAGE_BASE',
               'us-west-2:static-ucldc-cdlib-org/harvested_images;us-east-1:static.ucldc.cdlib.org/harvested_images'
@@ -47,6 +49,57 @@ def link_is_to_image(url, auth=None):
     reg_type = content_type.split('/', 1)[0].lower()
     return reg_type == 'image'
 
+# Need to make each download a separate job.
+def stash_image(doc, url_cache, hash_cache, bucket_bases=BUCKET_BASES, auth=None):
+    '''Stash the images in s3, using md5s3stash
+    Duplicate it among the "BUCKET_BASES" list. This will give redundancy
+    in case some idiot (me) deletes one of the copies. Not tons of data so
+    cheap to replicate them.
+    Return md5s3stash report if image found
+    If link is not an image type, don't stash & return None
+    '''
+    try:
+        url_image = doc['isShownBy']
+        if not url_image:
+            raise ValueError("isShownBy empty for {0}".format(doc['_id']))
+    except KeyError, e:
+        raise KeyError("isShownBy missing for {0}".format(doc['_id']))
+    if isinstance(url_image, list): # need to fix marc map_is_shown_at
+        url_image = url_image[0]
+    #try to parse url, check values of scheme & netloc at least
+    url_parsed = urlparse.urlsplit(url_image)
+    if url_parsed.scheme == 'ark':
+        # for some OAC objects, the reference image is not a url but a path.
+        url_image = '/'.join((URL_OAC_CONTENT_BASE, url_image))
+    elif not url_parsed.scheme or not url_parsed.netloc:
+        print >> sys.stderr, 'Link not http URL for {} - {}'.format(
+                                  doc['_id'], url_image)
+        return None
+    reports = []
+    if link_is_to_image(url_image, auth):
+        for bucket_base in bucket_bases:
+            try:
+                logging.getLogger('image_harvest.stash_image').info(
+                        'bucket_base:{0} url_image:{1}'.format(
+                            bucket_base, url_image))
+                region, bucket_base = bucket_base.split(':')
+                conn = boto.s3.connect_to_region(region)
+                report = md5s3stash.md5s3stash(url_image,
+                                         bucket_base=bucket_base,
+                                         conn=conn,
+                                         url_auth=auth,
+                                         url_cache=url_cache,
+                                         hash_cache=hash_cache)
+                reports.append(report)
+            except TypeError, e:
+                print >> sys.stderr, 'TypeError for doc:{} {} Msg: {} Args: {}'.format(
+                    doc['_id'], url_image, e.message, e.args)
+        return reports
+    else:
+        print >> sys.stderr, 'Not an image for {} - {}'.format(
+                                  doc['_id'], url_image)
+        return None
+
 class ImageHarvester(object):
     '''Useful to cache couchdb, authentication info and such'''
     def __init__(self, cdb=None,
@@ -55,7 +108,10 @@ class ImageHarvester(object):
                  couch_view=COUCHDB_VIEW,
                  bucket_bases=BUCKET_BASES,
                  object_auth=None,
-                 get_if_object=False):
+                 get_if_object=False,
+                 url_cache=None,
+                 hash_cache=None,
+                 harvested_object_cache=None):
         self._config = config()
         if cdb:
             self._couchdb = cdb
@@ -73,61 +129,20 @@ class ImageHarvester(object):
                             port=self._config['redis_port'],
                             password=self._config['redis_password'],
                             socket_connect_timeout=self._config['redis_connect_timeout'])
-        self._url_cache = redis_collections.Dict(key='ucldc-image-url-cache',
-                redis=self._redis)
-        self._hash_cache = redis_collections.Dict(key='ucldc-image-hash-cache',
-                redis=self._redis)
+        self._url_cache = url_cache if url_cache is not None else \
+                redis_collections.Dict(key='ucldc-image-url-cache',
+                        redis=self._redis)
+        self._hash_cache = hash_cache if hash_cache is not None else \
+                redis_collections.Dict(key='ucldc-image-hash-cache',
+                        redis=self._redis)
+        self._object_cache = harvested_object_cache if harvested_object_cache \
+                else redis_collections.Dict(
+                        key='ucldc:harvester:harvested-images',
+                        redis=self._redis)
 
-    # Need to make each download a separate job.
     def stash_image(self, doc):
-        '''Stash the images in s3, using md5s3stash
-        Duplicate it among the "BUCKET_BASES" list. This will give redundancy
-        in case some idiot (me) deletes one of the copies. Not tons of data so
-        cheap to replicate them.
-        Return md5s3stash report if image found
-        If link is not an image type, don't stash & return None
-        '''
-        try:
-            url_image = doc['isShownBy']
-            if not url_image:
-                raise ValueError("isShownBy empty for {0}".format(doc['_id']))
-        except KeyError, e:
-            raise KeyError("isShownBy missing for {0}".format(doc['_id']))
-        if isinstance(url_image, list): # need to fix marc map_is_shown_at
-            url_image = url_image[0]
-        #try to parse url, check values of scheme & netloc at least
-        url_parsed = urlparse.urlsplit(url_image)
-        if url_parsed.scheme == 'ark':
-            # for some OAC objects, the reference image is not a url but a path.
-            url_image = '/'.join((URL_OAC_CONTENT_BASE, url_image))
-        elif not url_parsed.scheme or not url_parsed.netloc:
-            print >> sys.stderr, 'Link not http URL for {} - {}'.format(
-                                      doc['_id'], url_image)
-            return None
-        reports = []
-        if link_is_to_image(url_image, self._auth):
-            for bucket_base in self._bucket_bases:
-                try:
-                    logging.getLogger('image_harvest.stash_image').info(
-                            'bucket_base:{0} url_image:{1}'.format(
-                                bucket_base, url_image))
-                    region, bucket_base = bucket_base.split(':')
-                    conn = boto.s3.connect_to_region(region)
-                    report = md5s3stash.md5s3stash(url_image,
-                                             bucket_base=bucket_base,
-                                             conn=conn,
-                                             url_auth=self._auth,
-                                             url_cache=self._url_cache,
-                                             hash_cache=self._hash_cache)
-                    reports.append(report)
-                except TypeError, e:
-                    print >> sys.stderr, 'TypeError for doc:{} {} Msg: {} Args: {}'.format(
-                        doc['_id'], url_image, e.message, e.args)
-            return reports
-        else:
-            print >> sys.stderr, 'Not an image for {} - {}'.format(
-                                      doc['_id'], url_image)
-            return None
+        return stash_image(doc, self._url_cache, self._hash_cache,
+                bucket_bases=self._bucket_bases, auth=self._auth)
 
     def update_doc_object(self, doc, report):
         '''Update the object field to point to an s3 bucket'''
@@ -142,12 +157,27 @@ class ImageHarvester(object):
     def harvest_image_for_doc(self, doc):
         '''Try to harvest an image for a couchdb doc'''
         reports = None
+        did = doc['_id']
+        object_cached = self._object_cache.get(did, False)
         if not self.get_if_object and doc.get('object', False):
-            print >> sys.stderr, 'Skipping {}, has object field'.format(doc['_id'])
+            print >> sys.stderr, 'Skipping {}, has object field'.format(did)
+            if not object_cached:
+                print >> sys.stderr, 'Save to object cache {}'.format(did)
+                self._object_cache[did] = [doc['object'],
+                    doc['object_dimensions']]
             return
+        if not self.get_if_object and object_cached:
+            #have already downloaded an image for this, just fill in data
+            ImageReport = namedtuple('ImageReport', 'md5, dimensions')
+            print >> sys.stderr, 'Restore from object_cache: {}'.format(did)
+            self.update_doc_object(doc, ImageReport(object_cached[0],
+                object_cached[1]))
+            return None
         try:
             reports = self.stash_image(doc)
             if reports != None and len(reports) > 0:
+                self._object_cache[did] = [reports[0].md5,
+                    reports[0].dimensions]
                 obj_val = self.update_doc_object(doc, reports[0])
         except KeyError, e:
             if 'isShownBy' in e.message:
@@ -216,6 +246,7 @@ def main(collection_key=None,
          url_couchdb=None,
          object_auth=None,
          get_if_object=False):
+    cleanup_work_dir() # remove files from /tmp
     ImageHarvester(url_couchdb=url_couchdb,
                          object_auth=object_auth,
                          get_if_object=get_if_object).by_collection(collection_key)

@@ -11,6 +11,18 @@ from harvester.couchdb_pager import couchdb_pager
 
 COUCHDB_VIEW = 'all_provider_docs/by_provider_name'
 
+def get_collection_doc_ids(collection_id, url_couchdb_source=None):
+    '''Use the by_provider_name view to get doc ids for a given collection
+    '''
+    _couchdb = get_couchdb(url=url_couchdb_source)
+    v = CouchDBCollectionFilter(couchdb_obj=_couchdb,
+                                    collection_key=str(collection_id),
+                                    include_docs=False)
+    doc_ids = []
+    for r in v:
+        doc_ids.append(r.id)
+    return doc_ids
+
 
 class CouchDBCollectionFilter(object):
     '''Class for selecting collections from the UCLDC couchdb data store.
@@ -21,6 +33,7 @@ class CouchDBCollectionFilter(object):
                  url_couchdb=None,
                  couchdb_name=None,
                  couch_view=COUCHDB_VIEW,
+                 include_docs=True
                  ):
         if not collection_key:
             collection_key = '{}'
@@ -32,7 +45,8 @@ class CouchDBCollectionFilter(object):
             self._couchdb = couchdb_obj
         self._view = couch_view
         self._view_iter = couchdb_pager(self._couchdb, self._view,
-                key=collection_key, include_docs='true')
+                key=collection_key, include_docs='true' if include_docs else
+                'false')
         #self._view_iter = self._couchdb.view(self._view, include_docs='true',
         #                                     key=collection_key)
 

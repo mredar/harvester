@@ -275,6 +275,8 @@ def ucla_ark(doc):
     "mods_recordInfo_recordIdentifier_t": "21198-zz002b1833",
     
     If one is found, safe to assume UCLA & make the ARK
+    NOTE: I cut & pasted this to the ucla_solr_dc_mapper to get it
+    into the "identifier" field
     '''
     ark = None
     id_fields =("mods_recordInfo_recordIdentifier_mlt",
@@ -322,7 +324,9 @@ def has_required_fields(doc):
             '---- OMITTED: Doc:{0} has no sourceResource.'.format(doc['_id']))
     if 'title' not in doc['sourceResource']:
         raise KeyError('---- OMITTED: Doc:{0} has no title.'.format(doc['_id']))
-    if 'image' == doc['sourceResource'].get('type', '').lower():
+    doc_type = doc['sourceResource'].get('type', '')
+    if not isinstance(doc_type, list) and  \
+            'image' == doc_type.lower():
         collection = doc.get('originalRecord', {}).get(
                 'collection', [{'harvest_type':'NONE'}])[0]
         if collection['harvest_type'] != 'NUX':
@@ -431,7 +435,7 @@ def get_sort_collection_data_string(collection):
             missing_equivalents=[])
     sort_string = ':'.join((sort_name,
                             collection['name'],
-                            collection['@id']))
+                            add_slash(collection['@id'])))
     return sort_string
 
 def add_sort_title(couch_doc, solr_doc):
