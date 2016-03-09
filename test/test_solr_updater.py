@@ -48,6 +48,7 @@ class SolrUpdaterTestCase(TestCase):
         self.assertEqual(sdoc['repository_data'], repo_data)
         self.assertEqual(sdoc['sort_title'],
                 u'neighbor my neighbor what a happy boy')
+        self.assertEqual(sdoc['type'], ['image', 'physical object'])
 
     def test_normalize_sort_field(self):
         self.assertEqual(normalize_sort_field('XXXXX'), 'xxxxx')
@@ -156,6 +157,7 @@ class SolrUpdaterTestCase(TestCase):
         self.assertEqual(sdoc['format'], 'mods')
         self.assertTrue('extent' not in sdoc)
         self.assertEqual(sdoc['sort_title'], u'neighbor')
+        self.assertEqual(sdoc['temporal'], [u'1964-1965'])
 
     def test_sort_title_all_punctuation(self):
         doc = json.load(open(DIR_FIXTURES+'/couchdb_title_all_punc.json'))
@@ -239,6 +241,21 @@ class SolrUpdaterTestCase(TestCase):
         }
         ret = has_required_fields(doc)
         self.assertEqual(ret, True)
+
+    def test_type_mapping(self):
+        doc = json.load(open(DIR_FIXTURES+'/couchdb_doc.json'))
+        ret = map_couch_to_solr_doc(doc)
+        self.assertEqual(ret['type'], 'image')
+        doc['sourceResource']['type'] = 'moving image'
+        ret = map_couch_to_solr_doc(doc)
+        self.assertEqual(ret['type'], 'moving image')
+        doc['sourceResource']['type'] = 'Physical ObjectXX'
+        ret = map_couch_to_solr_doc(doc)
+        self.assertEqual(ret['type'], 'physical object')
+        doc['sourceResource']['type'] = 'physicalobject'
+        ret = map_couch_to_solr_doc(doc)
+        self.assertEqual(ret['type'], 'physical object')
+
 
     def test_solr_pretty_id(self):
         '''Test the new solr id scheme on the various document types.

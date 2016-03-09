@@ -18,6 +18,8 @@ import time
 import datetime
 import os
 
+URL_CALISPHERE_BASE_COLLECTION = 'https://calisphere.org/collections/'
+
 base_query = {
     'facet': 'true',
     'facet.field': [
@@ -204,16 +206,21 @@ def create_missing_collections_page(workbook, header_format, number_format,
     page.write(0, 0, 'Collection URL', header_format)
     page.write(0, 1, 'Collection', header_format)
     page.write(0, 2, 'Count', header_format)
+    page.write(0, 4, 'Calisphere URL', header_format)
     # width
     page.set_column(0, 0, 40, )
     page.set_column(1, 1, 43, )
     page.set_column(2, 2, 10, )
+    page.set_column(4, 4, 40, )
     row = 1
     for item in data:
         c_url, c_name = item[0].split('::')
+        c_id = c_url.rsplit('/', 2)[1]
+        url_calisphere = URL_CALISPHERE_BASE_COLLECTION + c_id + '/'
         page.write(row, 0, c_url)
         page.write(row, 1, c_name)
         page.write_number(row, 2, item[1], n_format)
+        page.write(row, 4, url_calisphere)
         row = row + 1
     page.write_formula(row, 3, '=SUM(C2:C{})'.format(row))
     page.write(row, 4, runtime)
@@ -437,10 +444,10 @@ def main(argv=None):
                             type_ss_new=new_type_ss_dict,
                             missing_ready_for_pub=missing_ready_for_pub,
                             not_ready_for_pub=not_ready_for_pub)
-    write_csv(os.path.join(argv.outdir[0], '{}-collection_not_in_new.csv'.format(today)),
-            not_in_new)
-    write_csv(os.path.join(argv.outdir[0], '{}-missing_docs_in_new.csv'.format(today)),
-            new_less)
+    #write_csv(os.path.join(argv.outdir[0], '{}-collection_not_in_new.csv'.format(today)),
+    #        not_in_new)
+    #write_csv(os.path.join(argv.outdir[0], '{}-missing_docs_in_new.csv'.format(today)),
+    #        new_less)
 
 if __name__ == "__main__":
     sys.exit(main())

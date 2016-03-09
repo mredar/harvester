@@ -73,8 +73,8 @@ COUCHDOC_SRC_RESOURCE_TO_SOLR_MAPPING = {
     'relation'    : lambda d: dict_for_data_field('relation', d, 'relation'),
     'rights'      : lambda d: dict_for_data_field('rights', d, 'rights'),
     'subject'     : lambda d: {'subject': [s['name'] if isinstance(s, dict) else dejson('subject', s) for s in d['subject']]},
-    'temporalCoverage'    : lambda d: dict_for_data_field('temporalCoverage', d,
-        'temporal'),
+    'temporal'    : lambda d: {'temporal': unpack_date(d.get('temporal',
+        None))[0]},
     'title'       : lambda d: dict_for_data_field('title', d, 'title'),
     'type'        : lambda d: dict_for_data_field('type', d, 'type'),
 }
@@ -191,17 +191,17 @@ def get_dates_from_date_obj(date_obj):
     else:
         return None, None, None
 
-def map_date(d):
-    date_map = {}
-    date_source = d.get('date', None)
+def unpack_date(date_obj):
+    '''Unpack a couchdb date object'''
     dates = []
-    start_date = end_date = None
     dates_start = []
     dates_end = []
-    if date_source:
-        if isinstance(date_source, dict):
+    if not date_obj:
+        return None, None, None
+    else:
+        if isinstance(date_obj, dict):
             try:
-                displayDate, dt_start, dt_end = get_dates_from_date_obj(date_source)
+                displayDate, dt_start, dt_end = get_dates_from_date_obj(date_obj)
                 dates.append(displayDate)
                 if dt_start:
                      dates_start.append(dt_start)
@@ -210,14 +210,24 @@ def map_date(d):
             except KeyError:
                 pass
         else: #should be list
-            for dt in date_source:
+            for dt in date_obj:
                 displayDate, dt_start, dt_end = get_dates_from_date_obj(dt)
                 dates.append(displayDate)
                 if dt_start:
                      dates_start.append(dt_start)
                 if dt_end:
                     dates_end.append(dt_end)
+    return dates, dates_start, dates_end
 
+def map_date(d):
+    date_map = {}
+    date_source = d.get('date', None)
+
+    dates = []
+    start_date = end_date = None
+    dates_start = []
+    dates_end = []
+    dates, dates_start, dates_end = unpack_date(date_source)
     date_map['date'] = dates
 
     dates_start = sorted(dates_start)
@@ -316,6 +326,36 @@ def get_solr_id(couch_doc):
         hash_id.update(couch_doc['_id'])
         solr_id = hash_id.hexdigest()
     return solr_id
+
+def normalize_type(solr_doc):
+    '''Normalize the type field for the solr doc. Should be a lower case, word
+    separated DCMI type to match our UI
+    This is being done on a "as found" basis. When results that don't agreee
+    with the current list, handle them here.
+    Could be done in couch but easier here?
+    '''
+    def norm_type(d):
+        if d not in DCMI_TYPES:
+            if 'physical' in d.lower():
+                return 'physical object'
+            else:
+                return d #don't drop, will show in facets
+        else:
+            return d
+
+    DCMI_TYPES = ('collection', 'dataset', 'event', 'image',
+            'interactive resource', 'moving image', 'service', 'software',
+            'sound', 'text', 'physical object')
+    doc_type = solr_doc.get('type', None)
+    if doc_type:
+        if isinstance(doc_type, list):
+            norm_types = []
+            for d in doc_type:
+                norm_types.append(norm_type(d))
+            solr_doc['type'] = norm_types
+        else: #string? 
+            solr_doc['type'] = norm_type(doc_type)
+
 
 def has_required_fields(doc):
     '''Check the couchdb doc has required fields'''
@@ -511,6 +551,7 @@ def map_couch_to_solr_doc(doc):
             except TypeError, e:
                 print('TypeError for doc {} on originalRecord {}'.format(doc['_id'], p))
                 raise e
+    normalize_type(solr_doc)
     add_sort_title(doc, solr_doc)
     add_facet_decade(doc, solr_doc)
     solr_doc['id'] = get_solr_id(doc)
