@@ -44,7 +44,7 @@ def queue_deep_harvest_path(redis_host,
         timeout=timeout)
 
 
-def main(collection_ids, rq_queue='normal-stage', config=None, pynuxrc=None,
+def main(collection_ids, rq_queue='dh-q', config=None, pynuxrc=None,
         replace=True, timeout=JOB_TIMEOUT, log_handler=None):
     ''' Queue a deep harvest of a nuxeo object on a worker'''
     if not log_handler:
@@ -94,7 +94,7 @@ def def_args():
     parser = argparse.ArgumentParser(
         description='Queue a Nuxeo deep harvesting job for a single object')
     parser.add_argument('--rq_queue', type=str, help='RQ Queue to put job in',
-            default='normal-stage')
+            default='dh-q')
     parser.add_argument(
         'collection_ids', type=str, help='Collection ids, ";" delimited')
     #parser.add_argument(
